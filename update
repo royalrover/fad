@@ -1,0 +1,142 @@
+#!/bin/bash
+
+# update脚本执行失败，则本次remote push失败
+# update脚本在每次push之后运行，传入三个参数，分别为“推送目标名称”“该分支原来的指针及现在的指针”
+REFNAME=$1
+OLDREV=$2
+NEWREV=$3
+
+# 为了获取组，先获取“origin  git@git.showjoy.net:yuxiu/showjoy-assets.git (fetch)”或者“origin  http://git.showjoy.net/joyf2e/showjoy-portal.git (fetch)”
+# 考虑两种情况，即ssh和http方式传输
+GITLABTMP=`git remote -v  | grep origin | sed -n '1p;1q'`
+if[[ "$GITLABTMP" =~ "git@git" ]]; then
+    # 获取工程所属组
+    GITLABGROUP=`git remote -v | grep origin | sed -n '1p;1q' | awk -F":" '{print $2}' | awk -F"/" '{print $1}' | sed s/[[:space:]]//g`
+    # 获取工程名
+    GITPROJECTNAME=`git remote -v | grep origin | sed -n '1p;1q' | awk -F"/" '{print $2}' | awk -F"\." '{print $1}' | sed s/[[:space:]]//g`
+else
+    # 获取工程所属组
+    GITLABGROUP=`git remote -v  | grep origin | sed -n '1p;1q' | awk -F" " '{print $2}' | awk -F"/" '{print $4}' | sed s/[[:space:]]//g`
+    # 获取工程名
+    GITPROJECTNAME=`git remote -v |grep origin | sed -n '1p;1q' | awk -F" " '{print $2}' | awk -F"/" '{print $5}' | awk -F"\." '{print $1}' | sed s/[[:space:]]//g`
+fi
+
+# 在此判断是否为前端的工程，若不是，则执行默认的操作
+if [ "$GITLABGROUP"x != "joyf2e"x ]; then
+    ruby  /opt/gitlab/embedded/service/gitlab-shell/hooks/update $REFNAME $OLDREV $NEWREV
+    exit 0
+fi    
+
+
+# 执行针对前端项目的处理
+echo "**********exec update hook************"
+
+# 在脚本中判断$REFNAME是否满足格式 refs/tags/publish(dev)/
+
+# 判断目录是否是 bare仓库（服务端的bare仓库不会构建版本树）
+IS_BARE=$(git rev-parse --is-bare-repository)
+if [ -z "$IS_BARE" ]; then
+        echo >&2 "fatal: post-receive: IS_NOT_BARE"
+        exit 1
+fi
+
+# 部署的基目录
+BASE_DEPLOY=/home/data/f2e_deploy/
+
+# 部署的具体目录 
+DEPLOY_DIR=${BASE_DEPLOY}${GITPROJECTNAME}
+# 部署目录的操作目录
+DEPLOY_DEAL_DIR=${BASE_DEPLOY}${GITPROJECTNAME}"-archive"
+rm -rf $DEPLOY_DEAL_DIR
+mkdir $DEPLOY_DEAL_DIR
+
+if [ ! -d $DEPLOY_DIR ] ; then
+        echo >&2 "fatal: post-receive: DEPLOY_DIR_NOT_EXIST: \"$DEPLOY_DIR\""
+        exit 1
+fi
+
+echo "当前上传对象名称: $REFNAME"
+
+IS_PULL=`echo $REFNAME | awk -F"/" '{print $2 "/" $3}'` 
+VERSION=`echo $REFNAME | awk -F"/" '{print $3 "/" $4}'`   
+VERSIONINFO=`echo $REFNAME | awk -F"/" '{print $4}'`   
+
+case $IS_PULL in
+		# 发布线上新版本 format: publish/x.x.x
+        tags/publish)
+            echo >&2 "**********正在进行发布鉴权，只有管理员才能发布线上**********"
+            COMMITER=`git log --pretty=format:"%an" -1`
+
+            if [ "$COMMITER"x != "yangli"x -a "$COMMITER"x != "家遥"x -a "$COMMITER"x != "欲休"x ] ; then
+                echo >&2 "##########对不起，你没有权限发布线上版本##########"
+                echo >&2 "##########现已开放测试版本的发布权限，若要发布线上版本，请咨询欲休##########"
+                exit 1
+            fi
+
+            echo >&2 "tips:发布线上新版本,版本号为$VERSION"
+
+		    # 进入部署仓库，进行操作
+		    cd $DEPLOY_DIR
+            env -i /usr/local/bin/git checkout master
+	        env -i /usr/local/bin/git branch --set-upstream-to=origin/master 
+		env -i /usr/local/bin/git pull origin master
+		    		
+	        # 进行打包压缩上传
+		
+            	env -i cp -r * $DEPLOY_DEAL_DIR
+
+                # 判断当前工程是否需要进行spm打包，目前针对showjoy－portal和plugin进行打包
+                if [ "$GITPROJECTNAME" == "showjoy-portal" -o "$GITPROJECTNAME" == "plugin" ] ; then
+            	   spm build --base=$DEPLOY_DEAL_DIR 2>&1
+		
+		           cd $DEPLOY_DEAL_DIR
+                   mkdir $VERSIONINFO
+                   cp -r css dist $VERSIONINFO
+
+		           /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* 183.131.13.58:/home/YJFileDir/assets/f2e/$GITPROJECTNAME/$VERSION/ 2>&1
+        	       rm -rf $DEPLOY_DEAL_DIR/*
+               else
+                   cd $DEPLOY_DEAL_DIR
+                   mkdir $VERSIONINFO
+                   cp -r css js $VERSIONINFO
+
+                   /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* 183.131.13.58:/home/YJFileDir/assets/f2e/$GITPROJECTNAME/$VERSION/ 2>&1
+                   rm -rf $DEPLOY_DEAL_DIR/*
+                fi
+            ;;
+		# 发布测试版本 format: dev/x.x.x
+        tags/dev)
+            echo >&2 "tips:发布测试版本，测试版本号为$VERSION"
+
+	        # 进入部署仓库，进行操作
+    		cd $DEPLOY_DIR
+            
+                env -i /usr/local/bin/git checkout dev
+    		env -i /usr/local/bin/git branch --set-upstream-to=origin/dev
+    		env -i /usr/local/bin/git pull origin dev
+
+		# 进行打包压缩上传
+                env -i cp -r * $DEPLOY_DEAL_DIR
+		
+		cd $DEPLOY_DEAL_DIR
+		mkdir $VERSIONINFO
+		cp -r css src $VERSIONINFO
+                
+                # 目前针对测试版本，仅仅保留最近提交
+                # 放弃之前针对每次版本的保存
+                # /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/showjoy-portal/$VERSION/ 2>&1
+
+                /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/$GITPROJECTNAME/ 2>&1
+
+                rm -rf $DEPLOY_DEAL_DIR/*
+            ;;
+        *)
+			echo >&2 "tips: push branch(master/dev) success"
+			echo >&2 "tips: 若要发布线上新版本，命令格式形如: git tag publish/x.x.x -m \"publish/x.x.x\""
+			echo >&2 "tips: 若要发布测试版本，命令格式形如: git tag dev/x.x.x -m \"dev/x.x.x\""
+esac
+
+cd /var/opt/gitlab/git-data/repositories/joyf2e/$GITPROJECTNAME.git
+
+ruby  /opt/gitlab/embedded/service/gitlab-shell/hooks/update $REFNAME $OLDREV $NEWREV
+exit 0
