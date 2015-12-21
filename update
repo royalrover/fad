@@ -172,8 +172,16 @@ case $IS_PULL in
                 # /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/showjoy-portal/$VERSION/ 2>&1           
 
                 rm -rf $DEPLOY_DEAL_DIR/*
+            # 一旦发布component，则需更新mobi文件    
             elif [ "$GITLABGROUP"x == "fecomponent"x ] ; then
+                # 执行脚本
                 cd $DEPLOY_DEAL_DIR
+                SPON=/bin/cat spon.json | jq '.type'
+                # TODOS:
+                DEPS=/bin/cat package.json | jq '.dep'
+
+                node ./fecomponent.js $SPON $GITPROJECTNAME 
+                
                 mkdir $VERSIONINFO
                 cp -r build $VERSIONINFO
 
