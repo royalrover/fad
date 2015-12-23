@@ -1,4 +1,9 @@
 #!/bin/bash
+# 前端工程所在的组为：showjoy-assets,joyf2e,ggl-assets,fecomponent
+# 目前，portal工程暂不拆分，放置showjoy-assets组中
+# joyf2e组中，存放 vender，plugin工程，其中 vendor 仅仅保证版本控制和发布，plugin需要spm打包
+# ggl-assets组中，存放4个工程, template,console,mobile,portal
+
 
 # update脚本执行失败，则本次remote push失败
 # update脚本在每次push之后运行，传入三个参数，分别为“推送目标名称”“该分支原来的指针及现在的指针”
@@ -8,22 +13,17 @@ NEWREV=$3
 
 # 为了获取组，先获取“origin  git@git.showjoy.net:yuxiu/showjoy-assets.git (fetch)”或者“origin  http://git.showjoy.net/joyf2e/showjoy-portal.git (fetch)”
 # 考虑两种情况，即ssh和http方式传输
-GITLABTMP=`git remote -v  | grep origin | sed -n '1p;1q'`
-if[[ "$GITLABTMP" =~ "git@git" ]]; then
+
     # 获取工程所属组
-    GITLABGROUP=`git remote -v | grep origin | sed -n '1p;1q' | awk -F":" '{print $2}' | awk -F"/" '{print $1}' | sed s/[[:space:]]//g`
+    GITLABGROUP=`pwd|awk -F "/" '{print $(NF-1)}'`
     # 获取工程名
-    GITPROJECTNAME=`git remote -v | grep origin | sed -n '1p;1q' | awk -F"/" '{print $2}' | awk -F"\." '{print $1}' | sed s/[[:space:]]//g`
-else
-    # 获取工程所属组
-    GITLABGROUP=`git remote -v  | grep origin | sed -n '1p;1q' | awk -F" " '{print $2}' | awk -F"/" '{print $4}' | sed s/[[:space:]]//g`
-    # 获取工程名
-    GITPROJECTNAME=`git remote -v |grep origin | sed -n '1p;1q' | awk -F" " '{print $2}' | awk -F"/" '{print $5}' | awk -F"\." '{print $1}' | sed s/[[:space:]]//g`
-fi
+    GITPROJECTNAME=`pwd|awk -F "/" '{print $(NF)}'|awk -F "." '{print $1}'`
+
+echo $GITLABGROUP
 
 # 在此判断是否为前端的工程，若不是，则执行默认的操作
-if [ "$GITLABGROUP"x != "showjoy-assets"x -a "$GITLABGROUP"x != "fecomponent"x ]; then
-    ruby  /opt/gitlab/embedded/service/gitlab-shell/hooks/update $REFNAME $OLDREV $NEWREV
+if [ "$GITLABGROUP"x != "showjoy-assets"x -a "$GITLABGROUP"x != "fecomponent"x -a "$GITLABGROUP"x != "ggl-assets"x -a "$GITLABGROUP"x != "joyf2e"x ]; then
+    ruby  /opt/gitlab/embedded/service/gitlab-shell/hooks/update.ori $REFNAME $OLDREV $NEWREV
     exit 0
 fi    
 
@@ -44,22 +44,22 @@ fi
 BASE_DEPLOY=/home/data/f2e_deploy/
 
 # 部署的具体目录 
-DEPLOY_DIR=${BASE_DEPLOY}${GITPROJECTNAME}
+DEPLOY_DIR=${BASE_DEPLOY}${GITLABGROUP}/${GITPROJECTNAME}
 # 部署目录的操作目录
-DEPLOY_DEAL_DIR=${BASE_DEPLOY}${GITPROJECTNAME}"-archive"
+DEPLOY_DEAL_DIR=${BASE_DEPLOY}${GITLABGROUP}/${GITPROJECTNAME}"-archive"
 rm -rf $DEPLOY_DEAL_DIR
-mkdir $DEPLOY_DEAL_DIR
+mkdir -p $DEPLOY_DEAL_DIR
 
 # 若不存在$DEPLOY_DIR，则创建并clone
 if [ ! -d $DEPLOY_DIR ] ; then
         echo >&2 "fatal: post-receive: DEPLOY_DIR_NOT_EXIST: \"$DEPLOY_DIR\""
         echo >&2 "info: creating $DEPLOY_DIR..."
 
-        mkdir $DEPLOY_DIR
-        cd $DEPLOY_DIR
+        mkdir -p ${BASE_DEPLOY}${GITLABGROUP}
+        cd ${BASE_DEPLOY}${GITLABGROUP}
 
         # clone一个git工程
-        env -i /usr/local/bin/git clone git@git.showjoy.net:$GITLABGROUP/$GITPROJECTNAME.git
+        env -i /usr/local/bin/git clone http://git.showjoy.net/${GITLABGROUP}/${GITPROJECTNAME}.git
 fi
 
 echo "当前上传对象名称: $REFNAME"
@@ -94,7 +94,7 @@ case $IS_PULL in
 
             # 判断组，如果是showjoy-assets的移动端工程，则采用commonJS规范，只需上传build目录即可，若不是，则判断当前工程是否需要进行spm打包，目前针对showjoy－portal和plugin进行打包
             # 组fecomponent的工程只发至测试服务器
-            if [ "$GITLABGROUP"x == "showjoy-assets"x ] ; then
+            if [ "$GITLABGROUP"x == "showjoy-assets"x -o "$GITLABGROUP"x == "joyf2e"x ] ; then
 
                 if [ "$GITPROJECTNAME" == "portal" -o "$GITPROJECTNAME" == "plugin" ] ; then
                    spm build --base=$DEPLOY_DEAL_DIR 2>&1
@@ -119,7 +119,7 @@ case $IS_PULL in
 
                        /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* 183.131.13.58:/home/YJFileDir/assets/f2e/$GITLABGROUP/$GITPROJECTNAME/$VERSION/ 2>&1
                        rm -rf $DEPLOY_DEAL_DIR/*
-                else
+                elif [ "$GITLABGROUP"x == "showjoy-assets"x ] ; then
                    # 针对所有拆分的移动端工程
                    cd $DEPLOY_DEAL_DIR
                    mkdir $VERSIONINFO
@@ -128,6 +128,23 @@ case $IS_PULL in
                    /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* 183.131.13.58:/home/YJFileDir/assets/f2e/$GITLABGROUP/$GITPROJECTNAME/$VERSION/ 2>&1
                    rm -rf $DEPLOY_DEAL_DIR/*
                 fi
+            # 一旦发布component，则需更新mobi文件    
+            elif [ "$GITLABGROUP"x == "fecomponent"x ] ; then
+                # 执行脚本
+                cd $DEPLOY_DEAL_DIR
+                
+                # SPON=/bin/cat spon.json | jq '.type'
+                # # TODOS:
+                # DEPS=/bin/cat package.json | jq '.dep'
+
+                # node ./fecomponent.js $SPON $GITPROJECTNAME 
+                
+                mkdir $VERSIONINFO
+                cp -r build $VERSIONINFO
+
+                # fecomponent中的工程只在测试环境
+                /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/$GITLABGROUP/$GITPROJECTNAME/ 2>&1
+                rm -rf $DEPLOY_DEAL_DIR/*    
             fi
            
         ;;
@@ -145,48 +162,35 @@ case $IS_PULL in
             # 进行打包压缩上传
             env -i cp -r * $DEPLOY_DEAL_DIR
         
-            if [ "$GITLABGROUP"x == "showjoy-assets"x ] ; then
+            if [ "$GITLABGROUP"x == "showjoy-assets"x -o "$GITLABGROUP"x == "joyf2e"x ] ; then
 
                 cd $DEPLOY_DEAL_DIR
-                mkdir $VERSIONINFO
+                mkdir -p $VERSIONINFO/$GITLABGROUP/$GITPROJECTNAME
                 case $GITPROJECTNAME in
                     "portal")                          
-                        cp -r css dist $VERSIONINFO
-                        /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/$GITLABGROUP/$GITPROJECTNAME/ 2>&1
+			mv css dist $VERSIONINFO/$GITLABGROUP/$GITPROJECTNAME
+                        /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/ 2>&1
                     ;;
                     "plugin")
-                        cp -r dist $VERSIONINFO
-                        /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/$GITLABGROUP/$GITPROJECTNAME/ 2>&1
+			mv dist $VERSIONINFO/$GITLABGROUP/$GITPROJECTNAME
+                        /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/ 2>&1
                     ;;
                     "vendor")
-                        cp -r * $VERSIONINFO
-                        /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/$GITLABGROUP/$GITPROJECTNAME/ 2>&1
+			mv * $VERSIONINFO/$GITLABGROUP/$GITPROJECTNAME
+                        /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/ 2>&1
                     ;;
                     *)
-                        cp -r build $VERSIONINFO
-                        /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/$GITLABGROUP/$GITPROJECTNAME/ 2>&1
+                        if [ "$GITLABGROUP"x == "showjoy-assets"x ] ; then
+			mv build $VERSIONINFO/$GITLABGROUP/$GITPROJECTNAME
+                        /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/ 2>&1
+                        fi
                 esac
                                       
                 # 目前针对测试版本，仅仅保留最近提交
                 # 放弃之前针对每次版本的保存
                 # /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/showjoy-portal/$VERSION/ 2>&1           
 
-                rm -rf $DEPLOY_DEAL_DIR/*
-            # 一旦发布component，则需更新mobi文件    
-            elif [ "$GITLABGROUP"x == "fecomponent"x ] ; then
-                # 执行脚本
-                cd $DEPLOY_DEAL_DIR
-                SPON=/bin/cat spon.json | jq '.type'
-                # TODOS:
-                DEPS=/bin/cat package.json | jq '.dep'
-
-                node ./fecomponent.js $SPON $GITPROJECTNAME 
-                
-                mkdir $VERSIONINFO
-                cp -r build $VERSIONINFO
-
-                /usr/bin/rsync -avzP $DEPLOY_DEAL_DIR/$VERSIONINFO/* root@192.168.0.221:/usr/local/nginx/html/assets/f2e/$GITLABGROUP/$GITPROJECTNAME/ 2>&1
-                rm -rf $DEPLOY_DEAL_DIR/*
+                #rm -rf $DEPLOY_DEAL_DIR/*
             fi
         ;;
         *)
@@ -197,5 +201,5 @@ esac
 
 cd /var/opt/gitlab/git-data/repositories/$GITLABGROUP/$GITPROJECTNAME.git
 
-ruby  /opt/gitlab/embedded/service/gitlab-shell/hooks/update $REFNAME $OLDREV $NEWREV
+ruby  /opt/gitlab/embedded/service/gitlab-shell/hooks/update.ori $REFNAME $OLDREV $NEWREV
 exit 0
